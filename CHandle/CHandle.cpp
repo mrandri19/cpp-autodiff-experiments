@@ -4,7 +4,7 @@
 #include <iostream>
 #include <memory>
 #include <vector>
-#include <set>
+#include <unordered_set>
 
 int global_id = 0;
 
@@ -20,7 +20,7 @@ public:
 
 	// TODO(Andrea): why do these need to be public?
 	virtual double eval() = 0; // TODO(Andrea): read on pure virtual functions
-	virtual void post_order(std::set<int>& visited, std::vector<Node*>& topological_order) = 0;
+	virtual void post_order(std::unordered_set<int>& visited, std::vector<std::shared_ptr<Node>>& topological_order) = 0;
 
 	double get_computed_value();
 	void set_computed_value(double computed_value_);
@@ -59,14 +59,14 @@ void Node::set_computed_value(double computed_value_)
 
 /*****************************************************************************/
 
-class Constant : public Node
+class Constant : public Node, public std::enable_shared_from_this<Constant>
 {
 public:
 	Constant(double value_);
 	~Constant();
 
 	double eval();
-	void post_order(std::set<int>& visited, std::vector<Node*>& topological_order);
+	void post_order(std::unordered_set<int>& visited, std::vector<std::shared_ptr<Node>>& topological_order);
 
 	// TODO(Andrea): implement addition syntax sugar. Will it require prototype
 	// declarations?
@@ -92,9 +92,9 @@ double Constant::eval() {
 	return this->get_computed_value();
 }
 
-void Constant::post_order(std::set<int>& visited, std::vector<Node*>& topological_order) {
+void Constant::post_order(std::unordered_set<int>& visited, std::vector<std::shared_ptr<Node>>& topological_order) {
 	visited.insert(this->get_id());
-	topological_order.push_back(this);
+	topological_order.push_back(this->shared_from_this());
 }
 
 /*****************************************************************************/
@@ -102,14 +102,16 @@ void Constant::post_order(std::set<int>& visited, std::vector<Node*>& topologica
 
 // TODO(Andrea): shouldn't the fact that we are using shared pointers be an
 // implementation detail?
-class Addition : public Node
+// Could use a private constructor + factory constructor that returns a shared
+// pointer
+class Addition : public Node, public std::enable_shared_from_this<Addition>
 {
 public:
 	Addition(std::shared_ptr<Node> lhs_, std::shared_ptr<Node> rhs_);
 	~Addition();
 
 	double eval();
-	void post_order(std::set<int>& visited, std::vector<Node*>& topological_order);
+	void post_order(std::unordered_set<int>& visited, std::vector<std::shared_ptr<Node>>& topological_order);
 
 private:
 	std::shared_ptr<Node> lhs;
@@ -142,17 +144,13 @@ double Addition::eval()
 	return this->get_computed_value();
 }
 
-// TODO(Andrea): I am making copies
-void Addition::post_order(std::set<int>& visited, std::vector<Node*>& topological_order)
+void Addition::post_order(std::unordered_set<int>& visited, std::vector<std::shared_ptr<Node>>& topological_order)
 {
 	visited.insert(this->get_id());
 	if (visited.find(this->lhs->get_id()) == visited.end()) this->lhs->post_order(visited, topological_order);
 	if (visited.find(this->rhs->get_id()) == visited.end()) this->rhs->post_order(visited, topological_order);
 
-	// ok this should make a copy, TODO(Andrea): check it
-	// TODO(Andrea): is shared_ptr<A> contravariant to A -> B?
-	// TODO(Andrea): is this naked pointer an anti-pattern?
-	topological_order.push_back(this);
+	topological_order.push_back(this->shared_from_this());
 }
 
 
@@ -177,9 +175,8 @@ int main()
 	auto add3 = make_shared<Addition>(add2, three);
 	cout << "add3->eval()=" << add3->eval() << endl;
 
-	// TODO(Andrea): should I use an hashset rather than a set?
-	std::set<int> visited;
-	std::vector<Node*> topological_order;
+	std::unordered_set<int> visited;
+	std::vector<std::shared_ptr<Node>> topological_order;
 	add3->post_order(visited, topological_order);
 	for (auto n : topological_order) n->eval();
 
