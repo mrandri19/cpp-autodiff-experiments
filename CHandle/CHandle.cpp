@@ -25,10 +25,10 @@ public:
 	int get_id();
 
 	virtual double forward(const std::unordered_map<std::string, double>& env) = 0;
-	
+
 	// TODO(Andrea): I don't like it, but how to make it return a variable number of values?
-	virtual void backprop(double adjoint) = 0;
-	virtual void post_order(std::unordered_set<int>& visited, std::vector<std::shared_ptr<Node>>& topological_order) = 0;
+	virtual std::vector<double> backward() = 0;
+	virtual std::vector<std::shared_ptr<Node>> children() = 0;
 
 	double get_computed_value();
 	void set_computed_value(double computed_value_);
@@ -84,9 +84,9 @@ class Constant : public Node, public std::enable_shared_from_this<Constant>
 public:
 	static std::shared_ptr<Constant> make(double value_);
 
-	double forward(const std::unordered_map<std::string, double>& env);
-	void backprop(double adjoint);
-	void post_order(std::unordered_set<int>& visited, std::vector<std::shared_ptr<Node>>& topological_order);
+	double forward(const std::unordered_map<std::string, double>& env) override;
+	std::vector<double> backward() override;
+	std::vector<std::shared_ptr<Node>> children() override;
 
 private:
 	Constant(double value_);
@@ -103,14 +103,13 @@ Constant::Constant(double value_) : value(value_) {}
 double Constant::forward(const std::unordered_map<std::string, double>& env) {
 	return this->value;
 }
-
-void Constant::post_order(std::unordered_set<int>& visited, std::vector<std::shared_ptr<Node>>& topological_order) {
-	visited.insert(this->get_id());
-	topological_order.push_back(this->shared_from_this());
+std::vector<double> Constant::backward() {
+	return {};
 }
 
-void Constant::backprop(double adjoint) {
-	this->add_to_adjoint(adjoint);
+std::vector<std::shared_ptr<Node>> Constant::children()
+{
+	return {};
 }
 
 /*****************************************************************************/
@@ -120,9 +119,9 @@ class Variable : public Node, public std::enable_shared_from_this<Variable>
 public:
 	static std::shared_ptr<Variable> make(std::string name_);
 
-	double forward(const std::unordered_map<std::string, double>& env);
-	void backprop(double adjoint);
-	void post_order(std::unordered_set<int>& visited, std::vector<std::shared_ptr<Node>>& topological_order);
+	double forward(const std::unordered_map<std::string, double>& env) override;
+	std::vector<double> backward() override;
+	std::vector<std::shared_ptr<Node>> children() override;
 
 private:
 	Variable(std::string name_);
@@ -140,13 +139,14 @@ double Variable::forward(const std::unordered_map<std::string, double>& env) {
 	return env.at(this->name);
 }
 
-void Variable::post_order(std::unordered_set<int>& visited, std::vector<std::shared_ptr<Node>>& topological_order) {
-	visited.insert(this->get_id());
-	topological_order.push_back(this->shared_from_this());
+std::vector<double> Variable::backward() {
+	return {};
 }
 
-void Variable::backprop(double adjoint) {
-	this->add_to_adjoint(adjoint);
+
+std::vector<std::shared_ptr<Node>> Variable::children()
+{
+	return {};
 }
 
 
@@ -158,9 +158,9 @@ class Addition : public Node, public std::enable_shared_from_this<Addition>
 public:
 	static std::shared_ptr<Addition> make(std::shared_ptr<Node> lhs_, std::shared_ptr<Node> rhs_);
 
-	double forward(const std::unordered_map<std::string, double>& env);
-	void backprop(double adjoint);
-	void post_order(std::unordered_set<int>& visited, std::vector<std::shared_ptr<Node>>& topological_order);
+	double forward(const std::unordered_map<std::string, double>& env) override;
+	std::vector<double> backward() override;
+	std::vector<std::shared_ptr<Node>> children() override;
 
 private:
 	Addition(std::shared_ptr<Node> lhs_, std::shared_ptr<Node> rhs_);
@@ -183,23 +183,17 @@ double Addition::forward(const std::unordered_map<std::string, double>& env)
 	auto lhs_val = lhs->get_computed_value();
 	auto rhs_val = rhs->get_computed_value();
 
-	return  lhs_val + rhs_val;
+	return lhs_val + rhs_val;
 }
 
-void Addition::post_order(std::unordered_set<int>& visited, std::vector<std::shared_ptr<Node>>& topological_order)
-{
-	visited.insert(this->get_id());
-	if (visited.find(this->lhs->get_id()) == visited.end()) this->lhs->post_order(visited, topological_order);
-	if (visited.find(this->rhs->get_id()) == visited.end()) this->rhs->post_order(visited, topological_order);
 
-	topological_order.push_back(this->shared_from_this());
+std::vector<double> Addition::backward() {
+	return { 1, 1 };
 }
 
-void Addition::backprop(double adjoint)
+std::vector<std::shared_ptr<Node>> Addition::children()
 {
-	this->add_to_adjoint(adjoint);
-	this->lhs->backprop(adjoint);
-	this->rhs->backprop(adjoint);
+	return { this->lhs, this->rhs };
 }
 
 std::shared_ptr<Addition> operator+(
@@ -215,9 +209,9 @@ class Multiplication : public Node, public std::enable_shared_from_this<Multipli
 public:
 	static std::shared_ptr<Multiplication> make(std::shared_ptr<Node> lhs_, std::shared_ptr<Node> rhs_);
 
-	double forward(const std::unordered_map<std::string, double>& env);
-	void backprop(double adjoint);
-	void post_order(std::unordered_set<int>& visited, std::vector<std::shared_ptr<Node>>& topological_order);
+	double forward(const std::unordered_map<std::string, double>& env) override;
+	std::vector<double> backward() override;
+	std::vector<std::shared_ptr<Node>> children() override;
 
 private:
 	Multiplication(std::shared_ptr<Node> lhs_, std::shared_ptr<Node> rhs_);
@@ -242,20 +236,13 @@ double Multiplication::forward(const std::unordered_map<std::string, double>& en
 	return lhs_val * rhs_val;
 }
 
-void Multiplication::post_order(std::unordered_set<int>& visited, std::vector<std::shared_ptr<Node>>& topological_order)
-{
-	visited.insert(this->get_id());
-	if (visited.find(this->lhs->get_id()) == visited.end()) this->lhs->post_order(visited, topological_order);
-	if (visited.find(this->rhs->get_id()) == visited.end()) this->rhs->post_order(visited, topological_order);
-
-	topological_order.push_back(this->shared_from_this());
+std::vector<double> Multiplication::backward() {
+	return { this->rhs->get_computed_value(), this->lhs->get_computed_value() };
 }
 
-void Multiplication::backprop(double adjoint)
+std::vector<std::shared_ptr<Node>> Multiplication::children()
 {
-	this->add_to_adjoint(adjoint);
-	this->lhs->backprop(adjoint * this->rhs->get_computed_value());
-	this->rhs->backprop(adjoint * this->lhs->get_computed_value());
+	return { this->lhs, this->rhs };
 }
 
 std::shared_ptr<Multiplication> operator*(
@@ -269,35 +256,46 @@ std::shared_ptr<Multiplication> operator*(
 // TODO(Andrea): use namespaces to avoid polluting the global namespace and
 // fuck with includes
 using env = std::unordered_map<std::string, double>;
-using std::cout; using std::endl;
+using std::cout; using std::endl; using std::shared_ptr; using std::unordered_set; using std::vector; using std::reverse; using std::unordered_map;
 
-// TODO(Andrea): figure out how the API should look like. Probably eval should be private and exposed through a function
-double eval(std::shared_ptr<Node> node, env eval_env) {
-	std::unordered_set<int> visited;
-	std::vector<std::shared_ptr<Node>> topological_order;
-	node->post_order(visited, topological_order);
-
-	// TODO(Andrea): understand if I should use auto, auto&, auto&& wtf
-	for (auto& n : topological_order) {
-		double val = n->forward(eval_env);
-		n->set_computed_value(val);
-
-		std::cout << "evaluation id=" << n->get_id()
-			<< " value=" << val << std::endl;
+void dag_post_order(shared_ptr<Node> node, unordered_set<int>& visited, vector<shared_ptr<Node>>& order) {
+	visited.insert(node->get_id());
+	for (auto& succ : node->children()) {
+		if (visited.find(succ->get_id()) == visited.end()) dag_post_order(succ, visited, order);
 	}
-
-	return node->get_computed_value();
+	order.push_back(node);
 }
 
-void backprop(std::shared_ptr<Node> node) {
-	std::unordered_set<int> visited;
-	std::vector<std::shared_ptr<Node>> topological_order_rev;
-	node->post_order(visited, topological_order_rev);
-	std::reverse(topological_order_rev.begin(), topological_order_rev.end());
+// TODO(Andrea): figure out how the API should look like. Probably forward should be private and exposed through a function
+double eval(std::shared_ptr<Node> root, env eval_env) {
+	unordered_set<int> visited;
+	vector<std::shared_ptr<Node>> order;
+	dag_post_order(root, visited, order);
 
-	cout << "Reverse topological order:" << endl;
-	for (auto& n : topological_order_rev) {
-		cout << n->get_id() << endl;
+	// TODO(Andrea): understand if I should use auto, auto&, auto&& wtf
+	for (auto& n : order) {
+		double val = n->forward(eval_env);
+		n->set_computed_value(val);
+		cout << "evaluation id=" << n->get_id() << " value=" << val << endl;
+	}
+
+	return root->get_computed_value();
+}
+
+void backprop(std::shared_ptr<Node> root) {
+	vector<std::shared_ptr<Node>> order;
+
+	unordered_set<int> visited;
+	dag_post_order(root, visited, order);
+	reverse(order.begin(), order.end());
+
+	root->add_to_adjoint(1);
+	for (auto& n : order) {
+		for (int i = 0; i < n->children().size(); i++) {
+			auto child = n->children()[i];
+			auto adj = n->backward()[i];
+			child->add_to_adjoint(adj * n->get_adjoint());
+		}
 	}
 }
 
@@ -317,7 +315,7 @@ int main()
 
 	cout << "eval should be equal to 23: " << eval(add2, eval_env) << endl;
 
-	add2->backprop(1);
+	backprop(add2);
 	cout << two->get_adjoint() << endl;
 	cout << three->get_adjoint() << endl;
 	cout << four->get_adjoint() << endl;
