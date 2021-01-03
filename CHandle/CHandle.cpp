@@ -5,25 +5,41 @@
 #include <memory>
 #include <vector>
 #include <unordered_set>
+#include <unordered_map>
+#include <algorithm>
+#include "CHandle.h"
 
 int global_id = 0;
+
+/*****************************************************************************/
+
+class Node;
+class Constant;
+class Addition;
 
 /*****************************************************************************/
 
 class Node
 {
 public:
-	Node();
-	~Node();
-
 	int get_id();
 
-	// TODO(Andrea): why do these need to be public?
-	virtual double eval() = 0; // TODO(Andrea): read on pure virtual functions
+	virtual double forward(const std::unordered_map<std::string, double>& env) = 0;
+	
+	// TODO(Andrea): I don't like it, but how to make it return a variable number of values?
+	virtual void backprop(double adjoint) = 0;
 	virtual void post_order(std::unordered_set<int>& visited, std::vector<std::shared_ptr<Node>>& topological_order) = 0;
 
 	double get_computed_value();
 	void set_computed_value(double computed_value_);
+
+	double get_adjoint();
+	void add_to_adjoint(double computed_value_);
+
+protected:
+	// NOTE: the constructor is protected so that (hopefully) it will only be
+	// called implicitely by the constructors of the child classes
+	Node();
 
 private:
 	int id;
@@ -31,17 +47,11 @@ private:
 	// Two reasons: to better model the absence of a value and to be able to
 	// hold a generic value such as a tensor.
 	double computed_value;
+
+	double adjoint;
 };
 
-Node::Node()
-{
-	this->id = global_id++;
-	this->computed_value = 0.0;
-}
-
-Node::~Node()
-{
-}
+Node::Node() : id(global_id++), computed_value(0.0), adjoint(0.0) {}
 
 int Node::get_id() {
 	return this->id;
@@ -57,39 +67,41 @@ void Node::set_computed_value(double computed_value_)
 	this->computed_value = computed_value_;
 }
 
+double Node::get_adjoint()
+{
+	return this->adjoint;
+}
+
+void Node::add_to_adjoint(double adjoint_)
+{
+	this->adjoint += adjoint_;
+}
+
 /*****************************************************************************/
 
 class Constant : public Node, public std::enable_shared_from_this<Constant>
 {
 public:
-	Constant(double value_);
-	~Constant();
+	static std::shared_ptr<Constant> make(double value_);
 
-	double eval();
+	double forward(const std::unordered_map<std::string, double>& env);
+	void backprop(double adjoint);
 	void post_order(std::unordered_set<int>& visited, std::vector<std::shared_ptr<Node>>& topological_order);
 
-	// TODO(Andrea): implement addition syntax sugar. Will it require prototype
-	// declarations?
-
 private:
+	Constant(double value_);
 	double value;
 };
 
-Constant::Constant(double value_)
+std::shared_ptr<Constant> Constant::make(double value_)
 {
-	this->value = value_;
+	return std::shared_ptr<Constant>(new Constant(value_));
 }
 
-Constant::~Constant()
-{
-}
+Constant::Constant(double value_) : value(value_) {}
 
-double Constant::eval() {
-	std::cout << "evaluation id=" << this->get_id() << " value=" << this->value << std::endl;
-
-	this->set_computed_value(this->value);
-
-	return this->get_computed_value();
+double Constant::forward(const std::unordered_map<std::string, double>& env) {
+	return this->value;
 }
 
 void Constant::post_order(std::unordered_set<int>& visited, std::vector<std::shared_ptr<Node>>& topological_order) {
@@ -97,51 +109,81 @@ void Constant::post_order(std::unordered_set<int>& visited, std::vector<std::sha
 	topological_order.push_back(this->shared_from_this());
 }
 
+void Constant::backprop(double adjoint) {
+	this->add_to_adjoint(adjoint);
+}
+
 /*****************************************************************************/
 
-
-// TODO(Andrea): shouldn't the fact that we are using shared pointers be an
-// implementation detail?
-// Could use a private constructor + factory constructor that returns a shared
-// pointer
-class Addition : public Node, public std::enable_shared_from_this<Addition>
+class Variable : public Node, public std::enable_shared_from_this<Variable>
 {
 public:
-	Addition(std::shared_ptr<Node> lhs_, std::shared_ptr<Node> rhs_);
-	~Addition();
+	static std::shared_ptr<Variable> make(std::string name_);
 
-	double eval();
+	double forward(const std::unordered_map<std::string, double>& env);
+	void backprop(double adjoint);
 	void post_order(std::unordered_set<int>& visited, std::vector<std::shared_ptr<Node>>& topological_order);
 
 private:
+	Variable(std::string name_);
+	std::string name;
+};
+
+std::shared_ptr<Variable>Variable::make(std::string name_)
+{
+	return std::shared_ptr<Variable>(new Variable(name_));
+}
+
+Variable::Variable(std::string name_) : name(name_) {}
+
+double Variable::forward(const std::unordered_map<std::string, double>& env) {
+	return env.at(this->name);
+}
+
+void Variable::post_order(std::unordered_set<int>& visited, std::vector<std::shared_ptr<Node>>& topological_order) {
+	visited.insert(this->get_id());
+	topological_order.push_back(this->shared_from_this());
+}
+
+void Variable::backprop(double adjoint) {
+	this->add_to_adjoint(adjoint);
+}
+
+
+/*****************************************************************************/
+
+
+class Addition : public Node, public std::enable_shared_from_this<Addition>
+{
+public:
+	static std::shared_ptr<Addition> make(std::shared_ptr<Node> lhs_, std::shared_ptr<Node> rhs_);
+
+	double forward(const std::unordered_map<std::string, double>& env);
+	void backprop(double adjoint);
+	void post_order(std::unordered_set<int>& visited, std::vector<std::shared_ptr<Node>>& topological_order);
+
+private:
+	Addition(std::shared_ptr<Node> lhs_, std::shared_ptr<Node> rhs_);
+
 	std::shared_ptr<Node> lhs;
 	std::shared_ptr<Node> rhs;
 };
 
-// TODO(Andrea): read up on short var initialization syntax
-Addition::Addition(std::shared_ptr<Node> lhs_, std::shared_ptr<Node> rhs_)
+Addition::Addition(std::shared_ptr<Node> lhs_, std::shared_ptr<Node> rhs_) : lhs(lhs_), rhs(rhs_) {}
+
+std::shared_ptr<Addition> Addition::make(std::shared_ptr<Node> lhs_, std::shared_ptr<Node> rhs_)
 {
-	this->lhs = lhs_;
-	this->rhs = rhs_;
+	return std::shared_ptr<Addition>(new Addition(lhs_, rhs_));
 }
 
-Addition::~Addition()
-{
-}
-
-double Addition::eval()
+double Addition::forward(const std::unordered_map<std::string, double>& env)
 {
 	// NOTE: evaluation order in a() + b() is undefined. This is why we use
 	// temporary variables
 	auto lhs_val = lhs->get_computed_value();
 	auto rhs_val = rhs->get_computed_value();
 
-	this->set_computed_value(lhs_val + rhs_val);
-
-	std::cout << "evaluation id=" << this->get_id()
-		<< " value=" << this->get_computed_value() << std::endl;
-
-	return this->get_computed_value();
+	return  lhs_val + rhs_val;
 }
 
 void Addition::post_order(std::unordered_set<int>& visited, std::vector<std::shared_ptr<Node>>& topological_order)
@@ -153,33 +195,131 @@ void Addition::post_order(std::unordered_set<int>& visited, std::vector<std::sha
 	topological_order.push_back(this->shared_from_this());
 }
 
+void Addition::backprop(double adjoint)
+{
+	this->add_to_adjoint(adjoint);
+	this->lhs->backprop(adjoint);
+	this->rhs->backprop(adjoint);
+}
+
+std::shared_ptr<Addition> operator+(
+	const std::shared_ptr<Node>& lhs, const std::shared_ptr<Node>& rhs)
+{
+	return Addition::make(lhs, rhs);
+}
 
 /*****************************************************************************/
 
-int main()
+class Multiplication : public Node, public std::enable_shared_from_this<Multiplication>
 {
-	using std::cout; using std::make_shared; using std::endl;
-	// Create a new Node and a new shared pointer. Then put the node in the shared
-	// pointer.
-	auto two = make_shared<Constant>(2);
-	auto three = make_shared<Constant>(3);
+public:
+	static std::shared_ptr<Multiplication> make(std::shared_ptr<Node> lhs_, std::shared_ptr<Node> rhs_);
 
-	// Create another reference to the node, using shared_ptr's copy constructor.
-	//auto twoRef(two);
-	//std::cout << "twoRef->getId()=" << twoRef->getId() << std::endl;
-	//std::cout << "twoRef->eval()=" << twoRef->eval() << std::endl;
+	double forward(const std::unordered_map<std::string, double>& env);
+	void backprop(double adjoint);
+	void post_order(std::unordered_set<int>& visited, std::vector<std::shared_ptr<Node>>& topological_order);
 
-	auto add1 = make_shared<Addition>(two, three);
-	auto four = make_shared<Constant>(4);
-	auto add2 = make_shared<Addition>(add1, four);
-	auto add3 = make_shared<Addition>(add2, three);
-	cout << "add3->eval()=" << add3->eval() << endl;
+private:
+	Multiplication(std::shared_ptr<Node> lhs_, std::shared_ptr<Node> rhs_);
 
+	std::shared_ptr<Node> lhs;
+	std::shared_ptr<Node> rhs;
+};
+
+Multiplication::Multiplication(std::shared_ptr<Node> lhs_, std::shared_ptr<Node> rhs_) : lhs(lhs_), rhs(rhs_) {}
+
+std::shared_ptr<Multiplication> Multiplication::make(std::shared_ptr<Node> lhs_, std::shared_ptr<Node> rhs_)
+{
+	return std::shared_ptr<Multiplication>(new Multiplication(lhs_, rhs_));
+}
+
+double Multiplication::forward(const std::unordered_map<std::string, double>& env)
+{
+	// NOTE: evaluation order in a() + b() is undefined. This is why we use
+	// temporary variables
+	auto lhs_val = lhs->get_computed_value();
+	auto rhs_val = rhs->get_computed_value();
+	return lhs_val * rhs_val;
+}
+
+void Multiplication::post_order(std::unordered_set<int>& visited, std::vector<std::shared_ptr<Node>>& topological_order)
+{
+	visited.insert(this->get_id());
+	if (visited.find(this->lhs->get_id()) == visited.end()) this->lhs->post_order(visited, topological_order);
+	if (visited.find(this->rhs->get_id()) == visited.end()) this->rhs->post_order(visited, topological_order);
+
+	topological_order.push_back(this->shared_from_this());
+}
+
+void Multiplication::backprop(double adjoint)
+{
+	this->add_to_adjoint(adjoint);
+	this->lhs->backprop(adjoint * this->rhs->get_computed_value());
+	this->rhs->backprop(adjoint * this->lhs->get_computed_value());
+}
+
+std::shared_ptr<Multiplication> operator*(
+	const std::shared_ptr<Node>& lhs, const std::shared_ptr<Node>& rhs)
+{
+	return Multiplication::make(lhs, rhs);
+}
+
+/*****************************************************************************/
+
+// TODO(Andrea): use namespaces to avoid polluting the global namespace and
+// fuck with includes
+using env = std::unordered_map<std::string, double>;
+using std::cout; using std::endl;
+
+// TODO(Andrea): figure out how the API should look like. Probably eval should be private and exposed through a function
+double eval(std::shared_ptr<Node> node, env eval_env) {
 	std::unordered_set<int> visited;
 	std::vector<std::shared_ptr<Node>> topological_order;
-	add3->post_order(visited, topological_order);
-	for (auto n : topological_order) n->eval();
+	node->post_order(visited, topological_order);
 
-	cout << "add3->eval()=" << add3->get_computed_value() << endl;
+	// TODO(Andrea): understand if I should use auto, auto&, auto&& wtf
+	for (auto& n : topological_order) {
+		double val = n->forward(eval_env);
+		n->set_computed_value(val);
+
+		std::cout << "evaluation id=" << n->get_id()
+			<< " value=" << val << std::endl;
+	}
+
+	return node->get_computed_value();
+}
+
+void backprop(std::shared_ptr<Node> node) {
+	std::unordered_set<int> visited;
+	std::vector<std::shared_ptr<Node>> topological_order_rev;
+	node->post_order(visited, topological_order_rev);
+	std::reverse(topological_order_rev.begin(), topological_order_rev.end());
+
+	cout << "Reverse topological order:" << endl;
+	for (auto& n : topological_order_rev) {
+		cout << n->get_id() << endl;
+	}
+}
+
+int main()
+{
+	// Create a new Node and a new shared pointer. Then put the node in the shared
+	// pointer.
+	auto two = Constant::make(2);
+	auto three = Constant::make(3);
+	auto four = Constant::make(4);
+
+	auto add1 = two + three;
+	auto mul1 = add1 * four;
+	auto add2 = mul1 + three;
+
+	env eval_env = { {"x1", -9.0} };
+
+	cout << "eval should be equal to 23: " << eval(add2, eval_env) << endl;
+
+	add2->backprop(1);
+	cout << two->get_adjoint() << endl;
+	cout << three->get_adjoint() << endl;
+	cout << four->get_adjoint() << endl;
 }
 
