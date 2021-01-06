@@ -24,17 +24,16 @@ class Node
 public:
 	int get_id();
 
-	virtual double forward(const std::unordered_map<std::string, double>& env) = 0;
-
-	// TODO(Andrea): I don't like it, but how to make it return a variable number of values?
-	virtual std::vector<double> backward() = 0;
 	virtual std::vector<std::shared_ptr<Node>> children() = 0;
+
+	virtual double forward(const std::unordered_map<std::string, double>& env) = 0;
+	virtual std::vector<double> backward() = 0;
 
 	double get_computed_value();
 	void set_computed_value(double computed_value_);
 
-	double get_adjoint();
-	void add_to_adjoint(double computed_value_);
+	double get_grad();
+	void add_to_grad(double value);
 
 protected:
 	// NOTE: the constructor is protected so that (hopefully) it will only be
@@ -48,10 +47,10 @@ private:
 	// hold a generic value such as a tensor.
 	double computed_value;
 
-	double adjoint;
+	double grad;
 };
 
-Node::Node() : id(global_id++), computed_value(0.0), adjoint(0.0) {}
+Node::Node() : id(global_id++), computed_value(0.0), grad(0.0) {}
 
 int Node::get_id() {
 	return this->id;
@@ -67,14 +66,14 @@ void Node::set_computed_value(double computed_value_)
 	this->computed_value = computed_value_;
 }
 
-double Node::get_adjoint()
+double Node::get_grad()
 {
-	return this->adjoint;
+	return this->grad;
 }
 
-void Node::add_to_adjoint(double adjoint_)
+void Node::add_to_grad(double adjoint_)
 {
-	this->adjoint += adjoint_;
+	this->grad += adjoint_;
 }
 
 /*****************************************************************************/
@@ -289,12 +288,13 @@ void backprop(std::shared_ptr<Node> root) {
 	dag_post_order(root, visited, order);
 	reverse(order.begin(), order.end());
 
-	root->add_to_adjoint(1);
+	root->add_to_grad(1);
 	for (auto& n : order) {
 		for (int i = 0; i < n->children().size(); i++) {
 			auto child = n->children()[i];
 			auto adj = n->backward()[i];
-			child->add_to_adjoint(adj * n->get_adjoint());
+			// TODO(Andrea): this in the future will be a vector jacobian product
+			child->add_to_grad(adj * n->get_grad());
 		}
 	}
 }
@@ -316,8 +316,8 @@ int main()
 	cout << "eval should be equal to 23: " << eval(add2, eval_env) << endl;
 
 	backprop(add2);
-	cout << two->get_adjoint() << endl;
-	cout << three->get_adjoint() << endl;
-	cout << four->get_adjoint() << endl;
+	cout << two->get_grad() << endl;
+	cout << three->get_grad() << endl;
+	cout << four->get_grad() << endl;
 }
 
